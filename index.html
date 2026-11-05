@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="referrer" content="no-referrer">
+<title>维修单查询</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#f2f3f5;color:#1a1d23;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.box{background:#fff;border-radius:14px;padding:28px 22px;max-width:340px;width:100%;text-align:center;
+box-shadow:0 2px 12px rgba(16,24,40,.07)}
+.t{font-size:17px;font-weight:700;margin-bottom:8px}
+.s{font-size:13px;color:#6b7280;line-height:1.7}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#1f6feb;
+margin-right:5px;animation:b 1s infinite alternate;vertical-align:middle}
+@keyframes b{from{opacity:.3}to{opacity:1}}
+a{display:inline-block;margin-top:18px;padding:11px 26px;background:#1f6feb;color:#fff;
+border-radius:9px;text-decoration:none;font-size:14px;font-weight:600}
+.btn{display:none;margin-top:18px}
+@media (prefers-color-scheme:dark){
+ body{background:#111418;color:#e6e8ec}
+ .box{background:#1a1e24;box-shadow:none}
+ .s{color:#9aa2ae}
+}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="t">维修单查询</div>
+  <div class="s" id="msg"><span class="dot"></span>正在加载维修单…</div>
+  <a id="go" class="btn" href="#">如果没有自动跳转，点这里</a>
+</div>
+<script>
+var BASE = "https://habits-requests-qty-worship.trycloudflare.com";
+var m = location.search.match(/[?&]u=(u-[0-9a-f]{12})/);
+var msg = document.getElementById('msg');
+var go = document.getElementById('go');
+if (!m) {
+  msg.innerHTML = '请扫描总部资产管理部发给您的<br>维修单位专属二维码';
+} else {
+  var url = BASE + '/' + m[1] + '.html';
+  go.href = url;
+  location.replace(url);
+  setTimeout(function () {
+    go.className = 'btn';
+    msg.textContent = '正在跳转，如长时间没反应请点下方按钮';
+  }, 1500);
+}
+</script>
+</body>
+</html>
