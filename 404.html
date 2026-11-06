@@ -38,9 +38,12 @@ font:13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",s
 <div id="tip">如页面一直空白，请点右上角 ··· → <b>在浏览器中打开</b></div>
 <script>
 (function () {
-  var BASE = "https://driver-dates-register-does.trycloudflare.com";
+  var BASE = "";
   var m = location.search.match(/[?&]u=(u-[0-9a-f]{12})/);
   if (!m) return;                       // 没有令牌 → 保留"请扫码"提示
+  // 同域模式（BASE 为空）：单位页就在本站根下，直接跳。
+  // 同域不产生跨域导航，微信不会弹"无法确认是否安全"的拦截页。
+  if (!BASE) { location.replace(m[1] + '.html'); return; }
   var f = document.getElementById('view');
   document.getElementById('empty').style.display = 'none';
   f.style.display = 'block';
