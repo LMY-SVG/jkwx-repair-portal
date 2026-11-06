@@ -388,13 +388,33 @@ def slugify(name: str, idx: int) -> str:
     return f"u{idx:02d}"
 
 
+def _salt() -> str:
+    """令牌盐值：只从环境变量或本地文件读，**绝不写进代码**。
+
+    本文件会进入公开仓库（GitHub Pages 的构建产物源），如果在源码里写死盐值，
+    任何人看仓库就能算出全部 30 家单位的页面地址，「令牌不可枚举」直接失效。
+    盐值本身不变（换值 = 全部二维码作废），只是搬家。
+    """
+    s = os.environ.get("PORTAL_SALT", "").strip()
+    if s:
+        return s
+    f = Path(__file__).resolve().parent / "portal_salt.txt"
+    if f.exists():
+        s = f.read_text(encoding="utf-8").strip()
+        if s:
+            return s
+    raise RuntimeError(
+        "缺少令牌盐值：请设置环境变量 PORTAL_SALT，或在脚本同级放 portal_salt.txt。"
+    )
+
+
 def unit_token(name: str) -> str:
     """单位名 → 稳定令牌。
 
     页面里含校区地址/申请人电话/维修金额，只靠「网址难猜」防护不够；
     文件名带上不可枚举的令牌，单位之间也无法互看（每家只拿到自己那张二维码）。
     """
-    salted = f"jkwx-repair::{name}".encode("utf-8")
+    salted = f"{_salt()}{name}".encode("utf-8")
     return hashlib.sha256(salted).hexdigest()[:12]
 
 
