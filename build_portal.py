@@ -374,6 +374,22 @@ def build_dataset(only_unit: str | None = None) -> dict:
     fingerprint = json.dumps(out_units, ensure_ascii=False, sort_keys=True)
     rev = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:12]
 
+    # 「校区老师签字」是 attachment 字段，钉钉自动化工作流的 FindRecords
+    # **读不到附件类型**（编译期直接报 unknown_field_id）。云端要显示这个标记，
+    # 只能靠本机把「审批编号 → 是否已签字」写成状态文件，再由云端读回来合并。
+    # 不写这个文件的话，云端每 10 分钟重部署一次会把标记抹掉、本机再部署又出现，
+    # 页面上的「校区已签字」就会忽隐忽现。
+    try:
+        signed_state = {}
+        for (no, _unit), bl in bills.items():
+            if no and any(b["signed"] for b in bl):
+                signed_state[no] = True
+        DATA.mkdir(parents=True, exist_ok=True)
+        (DATA / "signed.json").write_text(
+            json.dumps(signed_state, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "built_at": int(time.time()),
