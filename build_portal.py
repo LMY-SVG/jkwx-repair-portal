@@ -24,7 +24,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, r"C:\Users\17514\.workbuddy\skills\repair-qr-dispatch\scripts")
@@ -390,8 +390,12 @@ def build_dataset(only_unit: str | None = None) -> dict:
     except OSError:
         pass
 
+    # 时间一律按北京时间（UTC+8）打印。GitHub Actions 跑在 UTC，
+    # 用裸 datetime.now() 会让供应商在手机上看到"数据更新 06:30"（实际 14:30），
+    # 以为数据半天没更新。2026-11-06 实际踩到。
+    _now = datetime.now(timezone(timedelta(hours=8)))
     return {
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "generated_at": _now.strftime("%Y-%m-%d %H:%M"),
         "built_at": int(time.time()),
         "rev": rev,
         "units": out_units,
