@@ -1,0 +1,43 @@
+name: repair-sync
+
+# 钉钉 AI 表格的自动化工作流（每 10 分钟）把数据推送过来触发这里。
+# 触发方式：POST /repos/LMY-SVG/jkwx-repair-portal/dispatches
+#          {"event_type":"dingtalk-sync","client_payload":{"data":"<base64(gzip(json))>"}}
+#
+# 这样即使项目所有者的电脑关机，页面数据也会自动更新。
+# 仓库是公开的，所以：**不要 echo 任何业务数据**，cloud_sync.py 只打印 rev/单量。
+
+on:
+  repository_dispatch:
+    types: [dingtalk-sync]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 生成页面并部署到 Netlify
+        env:
+          PAYLOAD_B64: ${{ github.event.client_payload.data }}
+          NETLIFY_TOKEN: ${{ secrets.NETLIFY_TOKEN }}
+          PORTAL_SALT: ${{ secrets.PORTAL_SALT }}
+        run: |
+          if [ -z "$PAYLOAD_B64" ]; then
+            echo "没有 payload（手动触发时正常），跳过"
+            exit 0
+          fi
+          python cloud_sync.py
