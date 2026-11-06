@@ -106,6 +106,41 @@ def to_dws(records) -> list[dict]:
     return out
 
 
+def _relink(list_rows: list[dict], unit_rows: list[dict], cat_rows: list[dict]) -> None:
+    """把「按名称」的关联改成「按 recordId」，喂给 build_portal 那套关联逻辑。
+
+    ⚠ 这是云端最容易翻车的一处（2026-11-06 实测踩到）：
+    `FindRecords` 的输出**不含 rowId**，关联字段只给 `{text: "启明星", id: ["行ID"]}`。
+    单位表记录同样没有 rowId，于是 build_dataset 里的 `rid2unit` 查不到任何键，
+    维修清单行全部被丢弃 —— 页面能打开、30 家都在，但**全部 0 单**，
+    而且不报错、rev 照常更新，看着像"数据是空的"。
+    所以这里用显示名重建索引，把 linkedRecordIds 换成我们自己分配的 recordId。
+    """
+    def index_by_name(rows: list[dict], fid: str) -> dict[str, str]:
+        m: dict[str, str] = {}
+        for r in rows:
+            name = bp.text_of(r["cells"].get(fid)).strip()
+            if name and name not in m:
+                m[name] = r["recordId"]
+        return m
+
+    unit_by_name = index_by_name(unit_rows, "58IefVX")
+    cat_by_name = index_by_name(cat_rows, "ntrwa1J")
+
+    targets = [(bp.F_L_UNIT, unit_by_name)]
+    targets += [(m["cat"], cat_by_name) for m in bp.F_L_LINES.values()]
+
+    for r in list_rows:
+        cells = r["cells"]
+        for fid, idx in targets:
+            cell = cells.get(fid)
+            if not isinstance(cell, dict):
+                continue
+            name = (cell.get("name") or bp.text_of(cell)).strip()
+            rid = idx.get(name)
+            cells[fid] = {"linkedRecordIds": [rid] if rid else [], "name": name}
+
+
 def load_payload(raw: str) -> dict:
     """client_payload.data = base64(gzip(json))"""
     blob = base64.b64decode(raw)
@@ -121,6 +156,7 @@ def build_site(tables: dict) -> dict:
         bp.T_UNIT: to_dws(tables.get("unit")),
         bp.T_CAT: to_dws(tables.get("cat")),
     }
+    _relink(data[bp.T_LIST], data[bp.T_UNIT], data[bp.T_CAT])
     bp.q_all = lambda tid: data.get(tid, [])
     # 云端查不到通讯录；申请单里已带显示名，直接用
     bp.user_name = lambda uid, cache: uid or ""
