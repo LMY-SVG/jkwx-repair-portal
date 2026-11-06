@@ -163,6 +163,23 @@ def load_payload(raw: str) -> dict:
 
 
 # ------------------------------------------------------------------ 构建 + 部署
+def load_signed_state() -> dict:
+    """读回「审批编号 → 已签字」，补上自动化读不到的附件字段。
+
+    签字是 attachment 类型，FindRecords 的 outputFields 不收（编译期报
+    unknown_field_id）。本机 push_signed.py 会把状态提交到仓库根
+    signed_state.json，Actions checkout 后就能读到。缺文件时返回空字典。
+    """
+    f = ROOT / "signed_state.json"
+    if not f.exists():
+        return {}
+    try:
+        d = json.loads(f.read_text(encoding="utf-8") or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def build_site(tables: dict) -> dict:
     data = {
         bp.T_APP: to_dws(tables.get("app")),
@@ -171,6 +188,12 @@ def build_site(tables: dict) -> dict:
         bp.T_CAT: to_dws(tables.get("cat")),
     }
     _relink(data[bp.T_LIST], data[bp.T_UNIT], data[bp.T_CAT])
+    signed = load_signed_state()
+    if signed:
+        for r in data[bp.T_LIST]:
+            no = bp.text_of(r["cells"].get(bp.F_L_NO))
+            if no and signed.get(no):
+                r["cells"][bp.F_L_SIGN] = True
     bp.q_all = lambda tid: data.get(tid, [])
     # 云端查不到通讯录；申请单里已带显示名，直接用
     bp.user_name = lambda uid, cache: uid or ""
