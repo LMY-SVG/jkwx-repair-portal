@@ -1,11 +1,19 @@
 name: repair-sync
 
-# 钉钉 AI 表格的自动化工作流（每 10 分钟）把数据推送过来触发这里。
+# 钉钉 AI 表格的自动化工作流（每 10 分钟）把 4 张表的数据推进来触发这里。
 # 触发方式：POST /repos/LMY-SVG/jkwx-repair-portal/dispatches
 #          {"event_type":"dingtalk-sync","client_payload":{"data":"<base64(gzip(json))>"}}
 #
-# 这样即使项目所有者的电脑关机，页面数据也会自动更新。
-# 仓库是公开的，所以：**不要 echo 任何业务数据**，cloud_sync.py 只打印 rev/单量。
+# 2026-11-06 改：部署目标从 Netlify 换成 GitHub Pages（artifact 部署）。
+#   1. Netlify 免费额度按账号算，每 10 分钟部署整站一天 144 次，几天就爆，
+#      爆了报 `Account credit usage exceeded - new deploys are blocked`，
+#      本机和云端同时瘫，数据静止。
+#   2. 微信把 netlify.app 整域风控，扫码跳过去会被拦。
+#   Pages artifact 部署：公开仓库 Actions 免费不限次、部署产物不进仓库
+#   （所以单位页的令牌仍然不可枚举）、与二维码同域（微信不拦跨域导航）。
+#
+# 仓库是公开的，Actions 日志任何人可见：
+#   只允许打印 rev / 单量 / 文件数，**绝不 echo 任何业务数据**。
 
 on:
   repository_dispatch:
@@ -14,6 +22,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: repair-sync
@@ -23,6 +33,9 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,14 +43,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 生成页面并部署到 Netlify
+      - name: 生成整站
         env:
           PAYLOAD_B64: ${{ github.event.client_payload.data }}
-          NETLIFY_TOKEN: ${{ secrets.NETLIFY_TOKEN }}
           PORTAL_SALT: ${{ secrets.PORTAL_SALT }}
+          SITE_OUT_DIR: _site
         run: |
           if [ -z "$PAYLOAD_B64" ]; then
-            echo "没有 payload（手动触发时正常），跳过"
+            echo "没有 payload（手动触发时正常）——跳过，不覆盖线上站点"
             exit 0
           fi
           python cloud_sync.py
+
+      # 数据没变时 cloud_sync 不写 _site，这里就不部署（Pages 对发布频率有软限制）
+      - name: 检查是否需要部署
+        id: chk
+        run: |
+          if [ -f _site/index.html ]; then
+            echo "go=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.chk.outputs.go == 'yes'
+        uses: actions/configure-pages@v5
+
+      - if: steps.chk.outputs.go == 'yes'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - if: steps.chk.outputs.go == 'yes'
+        id: deploy
+        uses: actions/deploy-pages@v4
