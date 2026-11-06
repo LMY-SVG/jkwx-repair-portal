@@ -21,6 +21,7 @@ import gzip
 import io
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -49,22 +50,40 @@ def _link(cell):
     return {"name": cell.get("text") or cell.get("name") or ""}
 
 
-def _people(cell):
-    """人员多选/单选：保证是 [{'name': 显示名}] 的形态（申请单里分派单位用的是它）。"""
+def _people(cell, split: bool = False):
+    """人员/多值字段：统一成 [{'name': 显示名}]。
+
+    两种坑（2026-11-06 用真实报文确认）：
+    1. **多选文本/关联会被压成一个逗号串**：分派单位拿到的是
+       `"强记女工,鑫扬帆,启明星"`，直接当单位名用 → 云端只认出一个"单位"，
+       30 家真实单位全部 0 单。必须按逗号拆开（split=True）。
+    2. **人员字段是一串 JSON 字符串**：`["{\\"staffId\\":\\"148133896\\",
+       \\"nickName\\":\\"包波罗\\"}"]`，要取 nickName，不能取整串。
+    """
     if cell is None:
         return []
     if isinstance(cell, str):
-        return [{"name": cell}]
+        s = cell.strip()
+        if s[:1] in "{[":
+            try:
+                return _people(json.loads(s), split)
+            except Exception:  # noqa: BLE001  不是合法 JSON，按普通文本处理
+                pass
+        if split:
+            parts = [p.strip() for p in re.split(r"[,，、;；]", s)]
+            return [{"name": p} for p in parts if p]
+        return [{"name": s}] if s else []
     if isinstance(cell, dict):
-        name = cell.get("text") or cell.get("name") or ""
+        name = (cell.get("nickName") or cell.get("name")
+                or cell.get("text") or "")
         if name:
-            return [{"name": name}]
+            return [{"name": str(name)}]
         ids = cell.get("id") or []
         return [{"name": str(i)} for i in ids] if isinstance(ids, list) else []
     if isinstance(cell, list):
         out = []
         for it in cell:
-            out.extend(_people(it))
+            out.extend(_people(it, split))
         return out
     return []
 
@@ -83,25 +102,20 @@ def to_dws(records) -> list[dict]:
                 continue
             cells[k] = v
         # 特定字段的形态修正（key 就是 fieldId，直接按需转）
-        for fid in (bp.F_L_UNIT, bp.F_APP_APPLICANT):
-            if fid in cells:
-                cells[fid] = _link(cells[fid]) if fid == bp.F_L_UNIT else cells[fid]
+        if bp.F_L_UNIT in cells:
+            cells[bp.F_L_UNIT] = _link(cells[bp.F_L_UNIT])
+        # 分派单位是**多值**，会被压成逗号串，必须拆开（split=True）
         if bp.F_APP_UNITS in cells:
-            cells[bp.F_APP_UNITS] = _people(cells[bp.F_APP_UNITS])
+            cells[bp.F_APP_UNITS] = _people(cells[bp.F_APP_UNITS], split=True)
         for m in bp.F_L_LINES.values():
             if m["cat"] in cells:
                 cells[m["cat"]] = _link(cells[m["cat"]])
-        # 人员字段：FindRecords 给的是显示名，塞进 userId 让 uid_of 取用；
-        # 拿不到名字就原样保留（dws 形态的 {"userId": ...} 仍能正常解析）
+        # 申请人：FindRecords 给的是 [{nickName, staffId}] 的 JSON 串，
+        # 塞进 userId 让 uid_of 取用（云端查不到通讯录，直接用显示名）
         if bp.F_APP_APPLICANT in cells:
-            c = cells[bp.F_APP_APPLICANT]
-            name = ""
-            if isinstance(c, dict):
-                name = c.get("text") or c.get("name") or ""
-            elif isinstance(c, str):
-                name = c
-            if name:
-                cells[bp.F_APP_APPLICANT] = {"userId": name}
+            who = _people(cells[bp.F_APP_APPLICANT])
+            if who and who[0].get("name"):
+                cells[bp.F_APP_APPLICANT] = {"userId": who[0]["name"]}
         out.append({"recordId": r.get("rowId") or f"r{i}", "cells": cells})
     return out
 
