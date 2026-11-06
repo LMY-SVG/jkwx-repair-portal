@@ -22,6 +22,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -228,6 +229,47 @@ def make_zip() -> bytes:
     return buf.getvalue()
 
 
+def write_site_dir(dest: Path) -> int:
+    """把整站摊到一个目录里（GitHub Pages artifact 用）。
+
+    目录布局与 Netlify 版完全一致：**路由器 index.html 占根路径**，
+    门户首页降级成 `_portal.html`。这样二维码里的 `?u=` 地址一个字都不用改。
+
+    为什么改用 artifact 部署（2026-11-06）：
+    1. Netlify 免费额度是按**账号**算的，每 10 分钟部署一次整站 → 一天 144 次，
+       几天就把 credit 打爆，报 `Account credit usage exceeded`。
+       爆了之后本机和云端**同时**被拒，数据直接停在那一刻。
+    2. 微信把 `netlify.app` 整个域名风控了，跳过去会被拦。
+    GitHub Pages artifact 部署则：公开仓库 Actions 免费不限次、部署次数不限、
+    且单位页与二维码**同域**（都在 lmy-svg.github.io），微信没有可拦的跨域跳转。
+    更关键的是 artifact 不进仓库 → 仓库文件列表里看不到 `u-*.html`
+    → 令牌仍然不可枚举（这是当初不用公开仓库 Pages 的唯一原因）。
+    """
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for p in (ROOT / "site").rglob("*"):
+        if p.is_file():
+            rel = p.relative_to(ROOT / "site")
+            if rel.as_posix() == "index.html":
+                rel = Path("_portal.html")
+            tgt = dest / rel
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, tgt)
+            n += 1
+    for name in ("index.html", "404.html", ".nojekyll"):
+        # 本地跑时路由器在 gh-pages/；Actions 里 checkout 的是仓库，
+        # 路由器就在仓库根（gh-pages 目录是产物，不进仓库）。两处都认。
+        for base in (ROOT / "gh-pages", ROOT):
+            f = base / name
+            if f.exists():
+                shutil.copy2(f, dest / name)
+                n += 1
+                break
+    return n
+
+
 def deploy(blob: bytes, site_id: str, token: str) -> str:
     req = urllib.request.Request(
         f"{API}/sites/{site_id}/deploys", data=blob,
@@ -245,16 +287,27 @@ def main() -> int:
     t0 = time.time()
     tables = load_payload(raw)
     ds = build_site(tables)
+    n = sum(u["stats"]["total"] for u in ds["units"])
 
+    # 主路径：摊成目录，交给 upload-pages-artifact / deploy-pages
+    out = os.environ.get("SITE_OUT_DIR", "").strip()
+    if out:
+        files = write_site_dir(Path(out))
+        print(json.dumps({"rev": ds["rev"], "units": len(ds["units"]), "orders": n,
+                          "files": files, "target": "github-pages",
+                          "sec": round(time.time() - t0, 1)},
+                         ensure_ascii=False))
+        return 0
+
+    # 兼容旧路径（Netlify）。额度爆了之后基本用不到，留着以防临时回退。
     token = os.environ.get("NETLIFY_TOKEN", "").strip()
     site_id = (os.environ.get("NETLIFY_SITE_ID", "").strip()
                or (ROOT / "netlify_site.txt").read_text(encoding="utf-8").strip())
     if not token or not site_id:
-        print("缺少 NETLIFY_TOKEN / NETLIFY_SITE_ID", file=sys.stderr)
+        print("缺少 SITE_OUT_DIR / NETLIFY_TOKEN", file=sys.stderr)
         return 2
 
     deploy_id = deploy(make_zip(), site_id, token)
-    n = sum(u["stats"]["total"] for u in ds["units"])
     print(json.dumps({"rev": ds["rev"], "units": len(ds["units"]), "orders": n,
                       "deploy": deploy_id, "sec": round(time.time() - t0, 1)},
                      ensure_ascii=False))
