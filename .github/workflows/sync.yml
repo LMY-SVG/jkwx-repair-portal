@@ -67,6 +67,9 @@ jobs:
 
       - if: steps.chk.outputs.go == 'yes'
         uses: actions/configure-pages@v5
+        with:
+          # 站点被误删/后端卡死时，下次运行自动重建 Pages 站点（build_type=workflow）
+          enablement: true
 
       - if: steps.chk.outputs.go == 'yes'
         uses: actions/upload-pages-artifact@v3
