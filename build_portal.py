@@ -680,8 +680,12 @@ body{{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyst
 
   // ---- 实时性：后台数据一变就自动换页 ----
   // 页面本身是静态文件（秒开、可缓存），实时靠这里主动探版本。
-  // 只比 rev 不含时间，所以总部没改数据时不会无谓刷新、不闪屏。
+  // rev 变了 → 整页刷新（数据真变了）；rev 没变但构建时间变了 → 只原地
+  // 更新「数据更新 HH:MM」文字，不闪屏。2026-11-09 修正：只比 rev 会让
+  // 供应商在数据没变时一直看到旧时间，误以为系统停更（实际已反复踩坑）。
   var MYREV=document.querySelector('meta[name=rev]').content||'';
+  var UPDEL=document.getElementById('upd');
+  var MYTIME=UPDEL?UPDEL.textContent.replace(/^数据更新\\s*/,''):'';
   var probing=false;
   function probe(){{
     if(probing||document.hidden)return;
@@ -691,7 +695,16 @@ body{{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyst
     fetch('data/rev.json?ts='+Date.now(),{{cache:'no-store'}})
       .then(function(r){{return r.ok?r.json():null}})
       .then(function(j){{
-        if(!j||!j.rev||j.rev===MYREV)return;
+        if(!j||!j.rev)return;
+        if(j.rev===MYREV){{
+          // 数据没变，只是重新构建过：把时间戳文字换新即可
+          var t=j.generated_at;
+          if(t&&MYTIME&&t!==MYTIME){{
+            MYTIME=t;
+            if(UPDEL)UPDEL.textContent='数据更新 '+t;
+          }}
+          return;
+        }}
         // 数据变了：保留用户当前的筛选条件，只把内容换掉
         var keepF=state.f, keepQ=state.q, keepFrom=state.from, keepTo=state.to;
         try{{sessionStorage.setItem('jkwx-f',JSON.stringify(
