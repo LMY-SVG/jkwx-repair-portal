@@ -18,7 +18,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import html
+import io
 import json
 import os
 import re
@@ -330,6 +333,7 @@ def build_dataset(only_unit: str | None = None) -> dict:
                 "address": text_of(c.get(F_APP_ADDR)),
                 "applicant": applicant,
                 "phone": text_of(c.get(F_APP_PHONE)),
+                "qr": text_of(c.get(F_APP_QRURL)),
                 "applyDate": day_of(c.get(F_APP_APPLY_DATE)),
                 "dispatchDate": day_of(c.get(F_APP_DISPATCH_DATE)),
                 "items": items,
@@ -480,6 +484,11 @@ body{{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyst
 .kv{{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0}}
 .kv span:first-child{{color:#6b7280}} .kv span:last-child{{font-weight:600}}
 .money{{display:flex;justify-content:space-between;align-items:baseline;background:#f6f9ff;border-radius:9px;padding:11px 12px;margin-top:8px}}
+.qrs{{display:flex;align-items:center;gap:10px;margin-top:10px;padding:10px 11px;background:#f2f8f4;border-radius:9px;text-decoration:none}}
+.qrs img{{width:74px;height:74px;border-radius:6px;flex:none}}
+.qrs span{{font-size:12px;line-height:1.5;color:#4a5568}}
+.qrs b{{color:#0a9d5c}}
+.qrs.link{{padding:13px 11px;font-size:13px;color:#0a9d5c;font-weight:600}}
 .money em{{font-style:normal;font-size:12px;color:#4b5563}}
 .money b{{font-size:19px;color:#1f6feb;font-weight:700}}
 .line{{font-size:12.5px;padding:7px 0;border-bottom:1px dashed #eceef1;display:flex;justify-content:space-between;gap:10px}}
@@ -513,7 +522,7 @@ body{{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyst
  .stats{{background:#262b33}} .stats div{{background:#1a1e24}}
  .card{{background:#1a1e24;box-shadow:none}} .it{{background:#21262e}}
  .addr,.kv span:first-child,.it .d{{color:#9aa2ae}}
- .money{{background:#1c2530}} .line{{border-color:#2a3038}}
+ .money{{background:#1c2530}} .line{{border-color:#2a3038}} .qrs{{background:#1b2a22}} .qrs span{{color:#9fb3a8}} .qrs b{{color:#3ecf8e}}
  .tabs button{{background:#1a1e24;border-color:#2a3038;color:#b6bdc9}}
  .ft{{color:#6b7280}}
  .filter{{background:#1a1e24;box-shadow:none}}
@@ -757,7 +766,47 @@ CARD = """<div class="card {status}" data-s="{status}" data-d="{dateKey}" data-a
   <div class="kv"><span>校区申报</span><span>{applyDate}</span></div>
   {items}
   {bills}
+  {qrblock}
 </div>"""
+
+
+def qr_data_uri(text: str) -> str:
+    """把填报链接渲染成 PNG data URI（构建期内嵌，页面零外部依赖）。
+
+    与 repair-qr-dispatch 的 qr.py 同口径：纠错 M → 超容自动降 L。
+    环境没有 qrcode 库时返回空串，页面退化为纯链接按钮，不阻断构建。
+    """
+    if not text:
+        return ""
+    try:
+        import qrcode  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return ""
+    import qrcode.constants  # noqa: PLC0415
+    for ecc in (qrcode.constants.ERROR_CORRECT_M, qrcode.constants.ERROR_CORRECT_L):
+        try:
+            img = qrcode.make(text, error_correction=ecc, border=2, box_size=4)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+def qr_block(order: dict) -> str:
+    """每单底部的填报二维码块：小图 + 长按识别 + 点击直达表单。"""
+    url = order.get("qr") or ""
+    if not url:
+        return ""
+    esc = html.escape(url, quote=True)
+    uri = qr_data_uri(url)
+    if uri:
+        return ('<a class="qrs" href="' + esc + '">'
+                '<img src="' + uri + '" alt="填报二维码"/>'
+                '<span>维修完成后<b>扫码填报</b>维修服务单<br/>（点击打开 · 也可长按识别）</span></a>')
+    return ('<a class="qrs link" href="' + esc + '">'
+            '<span>维修完成后<b>点击此处</b>填报维修服务单</span></a>')
 
 
 def render_cards(unit: dict) -> str:
@@ -823,6 +872,7 @@ def render_cards(unit: dict) -> str:
             amtRaw=f'{o["total"]:.2f}',
             items="".join(items_html),
             bills=bill_html,
+            qrblock=qr_block(o),
         ))
     return "".join(out)
 
