@@ -53,6 +53,8 @@ jobs:
             echo "没有 payload（手动触发时正常）——跳过，不覆盖线上站点"
             exit 0
           fi
+          # 报修填报二维码内嵌到每单卡片（data URI）需要 qrcode+pillow
+          python -m pip install --quiet qrcode pillow
           python cloud_sync.py
 
       # 数据没变时 cloud_sync 不写 _site，这里就不部署（Pages 对发布频率有软限制）
@@ -67,9 +69,6 @@ jobs:
 
       - if: steps.chk.outputs.go == 'yes'
         uses: actions/configure-pages@v5
-        with:
-          # 站点被误删/后端卡死时，下次运行自动重建 Pages 站点（build_type=workflow）
-          enablement: true
 
       - if: steps.chk.outputs.go == 'yes'
         uses: actions/upload-pages-artifact@v3
