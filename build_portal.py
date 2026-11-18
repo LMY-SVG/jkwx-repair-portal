@@ -747,6 +747,8 @@ ORDER_PAGE = """<!DOCTYPE html>
   }}
   document.addEventListener('visibilitychange',function(){{if(!document.hidden)probe()}});
   setInterval(probe,45000);
+  // 进页面立刻校验一次：缓存里拿到的旧页面能马上发现并换新
+  probe();
 }})();
 </script>
 {overlays}
@@ -1047,6 +1049,8 @@ PAGE = """<!DOCTYPE html>
   // 回到前台立刻探一次（微信里切回来最需要新数据），在页时每 45s 探一次
   document.addEventListener('visibilitychange',function(){{if(!document.hidden)probe()}});
   setInterval(probe,45000);
+  // 进页面立刻校验一次：缓存里拿到的旧页面能马上发现并换新
+  probe();
 
   // 从上次刷新恢复筛选条件
   try{{
