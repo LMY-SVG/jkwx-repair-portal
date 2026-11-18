@@ -182,13 +182,25 @@ def load_signed_state() -> dict:
 
 
 def build_site(tables: dict) -> dict:
-    data = {
-        bp.T_APP: to_dws(tables.get("app")),
-        bp.T_LIST: to_dws(tables.get("list")),
-        bp.T_UNIT: to_dws(tables.get("unit")),
-        bp.T_CAT: to_dws(tables.get("cat")),
-    }
-    _relink(data[bp.T_LIST], data[bp.T_UNIT], data[bp.T_CAT])
+    if tables.get("_mode") == "dws":
+        # 本机直推（2026-11-18）：payload 里就是 dws record query 的原始行，
+        # 与本地 build_portal 完全同源，无需 FindRecords → dws 的形态转换，
+        # 也无需按名称重连（本地数据本来就带真实 linkedRecordIds）。
+        # 好处：不经过钉钉自动化，0 自动化额度消耗。
+        data = {
+            bp.T_APP: tables.get("app") or [],
+            bp.T_LIST: tables.get("list") or [],
+            bp.T_UNIT: tables.get("unit") or [],
+            bp.T_CAT: tables.get("cat") or [],
+        }
+    else:
+        data = {
+            bp.T_APP: to_dws(tables.get("app")),
+            bp.T_LIST: to_dws(tables.get("list")),
+            bp.T_UNIT: to_dws(tables.get("unit")),
+            bp.T_CAT: to_dws(tables.get("cat")),
+        }
+        _relink(data[bp.T_LIST], data[bp.T_UNIT], data[bp.T_CAT])
     signed = load_signed_state()
     if signed:
         for r in data[bp.T_LIST]:
@@ -196,8 +208,10 @@ def build_site(tables: dict) -> dict:
             if no and signed.get(no):
                 r["cells"][bp.F_L_SIGN] = True
     bp.q_all = lambda tid: data.get(tid, [])
-    # 云端查不到通讯录；申请单里已带显示名，直接用
-    bp.user_name = lambda uid, cache: uid or ""
+    # 云端查不到通讯录；申请单里已带显示名，直接用。
+    # 本机直推（_mode=dws）时姓名随报文带过来，用 _names 还原。
+    name_map = tables.get("_names") or {}
+    bp.user_name = lambda uid, cache: name_map.get(str(uid or ""), uid or "")
 
     ds = bp.build_dataset()
     if not ds["units"]:
