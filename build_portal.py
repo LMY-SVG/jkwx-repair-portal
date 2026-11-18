@@ -510,6 +510,10 @@ body{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyste
 .dfield input[type=date]{flex:1;min-width:0;border:1px solid #dcdfe4;border-radius:9px;padding:9px 10px;font-size:13px;color:#1a1d23;background:#fff;-webkit-appearance:none;appearance:none;font-family:inherit}
 .dfield .tilde{color:#9aa0ac;font-size:13px;flex:0 0 auto}
 .dfield .clr{flex:0 0 auto;border:0;background:#f1f2f4;color:#5f6672;border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600}
+.sfield{display:flex;align-items:center;gap:8px;margin-top:9px}
+.sfield input[type=search]{flex:1;min-width:0;border:1px solid #dcdfe4;border-radius:9px;padding:9px 10px;font-size:13px;color:#1a1d23;background:#fff;-webkit-appearance:none;appearance:none;font-family:inherit}
+.sfield input[type=search]::placeholder{color:#a6adb8}
+.sfield .clr{flex:0 0 auto;border:0;background:#f1f2f4;color:#5f6672;border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600}
 .dhint{margin-top:9px;font-size:12px;color:#6b7280;line-height:1.6}
 .dhint b{color:#1f6feb}
 .rst{margin-top:10px;padding-top:10px;border-top:1px dashed #eceef1;display:flex;justify-content:space-between;font-size:12.5px}
@@ -528,6 +532,8 @@ body{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyste
  .chips button.on{background:#1c2f4d;border-color:#3b8bff;color:#8fb8ff}
  .dfield input[type=date]{background:#21262e;border-color:#2a3038;color:#e6e8ec;color-scheme:dark}
  .dfield .clr{background:#2a3038;color:#b6bdc9}
+ .sfield input[type=search]{background:#21262e;border-color:#2a3038;color:#e6e8ec;color-scheme:dark}
+ .sfield .clr{background:#2a3038;color:#b6bdc9}
  .rst{border-color:#2a3038} .rst b{color:#e6e8ec}
  .fwd{background:#1c2f4d;color:#8fb8ff} .arr button{background:#21262e;border-color:#2a3038;color:#b6bdc9} .arr .arr-btn{background:#1c2f4d;border-color:#3b8bff;color:#8fb8ff} .arr-badge{background:#1b2a22;color:#3ecf8e} .arr input[type=date]{background:#21262e;border-color:#2a3038;color:#e6e8ec;color-scheme:dark} .thb{background:#21262e}
 
@@ -835,6 +841,10 @@ PAGE = """<!DOCTYPE html>
       <button data-q="lm">上月</button>
       <button data-q="ty">今年</button>
     </div>
+    <div class="sfield">
+      <input type="search" id="kw" placeholder="搜索校区关键字，如：电子路 / 新教师学院" autocomplete="off">
+      <button class="clr" id="kw-clr" style="visibility:hidden">重置</button>
+    </div>
     <div class="dfield">
       <input type="date" id="d-from" aria-label="开始日期">
       <span class="tilde">至</span>
@@ -863,9 +873,11 @@ PAGE = """<!DOCTYPE html>
   var fromEl=document.getElementById('d-from'),toEl=document.getElementById('d-to');
   var chips=[].slice.call(document.querySelectorAll('#chips button'));
   var tabs=[].slice.call(document.querySelectorAll('.tabs button'));
-  var state={{q:'all',f:'all',from:'',to:''}};
+  var state={{q:'all',f:'all',from:'',to:'',kw:''}};
 
   // 本单位实际派单日期范围（用于空结果时给出可选项，避免误判"页面坏了"）
+  // 每单校区名缓存（.loc 即钉钉「校区」全串，如 川渝事业部-…-新都电子路中心校）
+  cards.forEach(function(c){{var L=c.querySelector('.loc');c.dataset.area=L?L.textContent.toLowerCase():''}});
   var days=cards.map(function(c){{return c.dataset.d}}).filter(Boolean).sort();
   var dmin=days[0]||'', dmax=days[days.length-1]||'';
   if(dmin){{
@@ -893,7 +905,8 @@ PAGE = """<!DOCTYPE html>
       var day=c.dataset.d||'';
       var okDate=(!lo||(day&&day>=lo))&&(!hi||(day&&day<=hi));
       var okTab=(state.f==='all'||c.dataset.s===state.f);
-      var show=okDate&&okTab;
+      var okKw=!state.kw||((c.dataset.area||'').indexOf(state.kw)>=0);
+      var show=okDate&&okTab&&okKw;
       c.style.display=show?'':'none';
       if(show){{n++;sum+=parseFloat(c.dataset.amt||0);
         if(c.dataset.s==='done')d++;else p++;}}
@@ -911,6 +924,7 @@ PAGE = """<!DOCTYPE html>
     tabs[2].querySelector('.tn').textContent=d;
 
     var parts=[];
+    if(state.kw)parts.push('校区含「'+state.kw+'」');
     if(lo||hi)parts.push((lo||'最早')+' 至 '+(hi||'今天'));
     parts.push(state.f==='pending'?'待维修':state.f==='done'?'已维修':'全部状态');
     document.getElementById('dhint').innerHTML=parts.join(' · ')+
@@ -953,6 +967,17 @@ PAGE = """<!DOCTYPE html>
     chips.forEach(function(x){{x.classList.remove('on')}});
     chips[0].classList.add('on');state.q='all';
     apply();
+  }};
+
+  // 校区关键字搜索：与时间/状态筛选叠加生效
+  var kwEl=document.getElementById('kw'),kwClr=document.getElementById('kw-clr');
+  kwEl.oninput=function(){{
+    state.kw=kwEl.value.trim().toLowerCase();
+    kwClr.style.visibility=state.kw?'visible':'hidden';
+    apply();
+  }};
+  kwClr.onclick=function(){{
+    kwEl.value='';state.kw='';kwClr.style.visibility='hidden';apply();kwEl.focus();
   }};
 
   tabs.forEach(function(b){{
@@ -1252,16 +1277,6 @@ def write_pages(ds: dict) -> list[dict]:
     # 页面轮询只需要 rev，所以公开 rev.json 就够了。
     atomic_write(SITE / "data" / "rev.json",
                  json.dumps({"generated_at": ds["generated_at"], "rev": ds["rev"]},
-                            ensure_ascii=False))
-    # 后台搜索索引（2026-11-18 应总部需求新增）：入口页 index.html 无令牌时
-    # 显示搜索框，按校区名关键字筛选全部单位并跳转对应单位页。
-    # ⚠ 这是公开文件：拿到入口地址的人可浏览全部单位页（用户已确认接受）。
-    atomic_write(SITE / "data" / "search.json",
-                 json.dumps({"generated_at": ds["generated_at"], "rev": ds["rev"],
-                             "units": [{"name": m["name"], "slug": m["slug"],
-                                        "total": m["stats"]["total"],
-                                        "pending": m["stats"]["pending"]}
-                                       for m in manifest]},
                             ensure_ascii=False))
     # 兜底：清掉历史版本留在公开目录里的 units.json
     stale = SITE / "data" / "units.json"
