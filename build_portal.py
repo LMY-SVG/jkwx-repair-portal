@@ -730,11 +730,19 @@ ORDER_PAGE = """<!DOCTYPE html>
   // 转发页也自动探新：数据一变整页刷新，师傅看到的永远是最新内容
   var MYREV=document.querySelector('meta[name=rev]').content||'';
   if(typeof fetch!=='function')return;
+  // 带版本号重载：Pages 的 HTML 带 max-age=600，直接 reload 会拿到旧缓存，
+  // 只有换 URL（加 ?v=rev）才能保证取到刚部署的新页面。
+  function hardReload(rev){{
+    try{{
+      var u=new URL(location.href);u.searchParams.set('v',rev||String(Date.now()));
+      location.replace(u.toString());
+    }}catch(e){{location.reload()}}
+  }}
   function probe(){{
     if(document.hidden)return;
     fetch('data/rev.json?ts='+Date.now(),{{cache:'no-store'}})
       .then(function(r){{return r.ok?r.json():null}})
-      .then(function(j){{if(j&&j.rev&&j.rev!==MYREV)location.reload()}})
+      .then(function(j){{if(j&&j.rev&&j.rev!==MYREV)hardReload(j.rev)}})
       .catch(function(){{}});
   }}
   document.addEventListener('visibilitychange',function(){{if(!document.hidden)probe()}});
@@ -998,6 +1006,14 @@ PAGE = """<!DOCTYPE html>
   var UPDEL=document.getElementById('upd');
   var MYTIME=UPDEL?UPDEL.textContent.replace(/^数据更新\\s*/,''):'';
   var probing=false;
+  // 带版本号重载：HTML 有 max-age=600，直接 reload 可能拿到旧缓存页，
+  // 表现为「数据早已更新、手机上时间戳不动」。换 URL 才是一次真取新。
+  function hardReload(rev){{
+    try{{
+      var u=new URL(location.href);u.searchParams.set('v',rev||String(Date.now()));
+      location.replace(u.toString());
+    }}catch(e){{location.reload()}}
+  }}
   function probe(){{
     if(probing||document.hidden)return;
     // 极老的微信内核没有 fetch：直接放弃探测，页面照常显示（只是不自动刷新）
@@ -1020,7 +1036,7 @@ PAGE = """<!DOCTYPE html>
         var keepF=state.f, keepQ=state.q, keepFrom=state.from, keepTo=state.to;
         try{{sessionStorage.setItem('jkwx-f',JSON.stringify(
           {{f:keepF,q:keepQ,from:keepFrom,to:keepTo}}))}}catch(e){{}}
-        location.reload();
+        hardReload(j.rev);
       }})
       .catch(function(){{}})
       .then(function(){{probing=false}});
