@@ -830,7 +830,7 @@ PAGE = """<!DOCTYPE html>
 <div class="hd">
   <div class="sub">维修申报 · 分派单查询</div>
   <h1>{unit}</h1>
-  <div class="meta"><span id="upd">数据更新 {generated_at}</span><span>共 {total} 单</span></div>
+  <div class="meta"><span id="upd">数据更新 {generated_at}</span><span id="chk"></span><span>共 {total} 单</span></div>
 </div>
 <div class="stats">
   <div><b id="s-total">{total}</b><span>分派单数</span></div>
@@ -1023,6 +1023,9 @@ PAGE = """<!DOCTYPE html>
       .then(function(r){{return r.ok?r.json():null}})
       .then(function(j){{
         if(!j||!j.rev)return;
+        var C=document.getElementById('chk');
+        if(C){{C.textContent='已校验 '+new Date().toLocaleTimeString('zh-CN',
+          {{hour:'2-digit',minute:'2-digit'}})}};
         if(j.rev===MYREV){{
           // 数据没变，只是重新构建过：把时间戳文字换新即可
           var t=j.generated_at;
