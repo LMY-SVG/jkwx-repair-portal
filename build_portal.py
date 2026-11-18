@@ -25,10 +25,12 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote as urlquote
 
 sys.path.insert(0, r"C:\Users\17514\.workbuddy\skills\repair-qr-dispatch\scripts")
 try:
@@ -256,6 +258,7 @@ def uid_of(cell) -> str:
 
 # ------------------------------------------------------------------ 组装
 def build_dataset(only_unit: str | None = None) -> dict:
+    load_media_manifest()
     apps = q_all(T_APP)
     lists = q_all(T_LIST)
     units = q_all(T_UNIT)
@@ -339,6 +342,7 @@ def build_dataset(only_unit: str | None = None) -> dict:
                 "items": items,
                 "status": "done" if done else "pending",
                 "bills": mine,
+                "media": MEDIA.get(no) or [],
                 "total": sum(b["total"] or 0 for b in mine),
             })
 
@@ -442,6 +446,362 @@ def unit_token(name: str) -> str:
     return hashlib.sha256(salted).hexdigest()[:12]
 
 
+CSS = """<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;padding-bottom:32px}
+.hd{background:linear-gradient(135deg,#1f6feb,#3b8bff);color:#fff;padding:20px 18px 18px}
+.hd .sub{font-size:12px;opacity:.82;letter-spacing:.3px}
+.hd h1{margin:4px 0 0;font-size:22px;font-weight:700;letter-spacing:.5px}
+.hd .meta{margin-top:10px;font-size:11.5px;opacity:.78;display:flex;gap:12px;flex-wrap:wrap}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#e6e8ec;margin:0 0 2px}
+.stats div{background:#fff;padding:12px 6px;text-align:center}
+.stats b{display:block;font-size:18px;font-weight:700;line-height:1.2}
+.stats span{font-size:11px;color:#6b7280}
+.b-done b{color:#0a9d5c} .b-pend b{color:#e08300} .b-amt b{color:#1f6feb;font-size:15px}
+.wrap{padding:12px}
+.tabs{display:flex;gap:8px;margin:0 0 12px}
+.tabs button{flex:1;border:1px solid #dcdfe4;background:#fff;color:#4b5563;padding:9px 0;border-radius:9px;font-size:13px;font-weight:600}
+.tabs button.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.card.done{border-left:3px solid #0a9d5c} .card.pend{border-left:3px solid #e08300}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.no{font-size:12px;color:#6b7280;font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.pill{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.pill.done{background:#e6f7ef;color:#0a7d4b} .pill.pend{background:#fff5e5;color:#b46a00}
+.pill.red{background:#feecec;color:#c62828} .pill.blue{background:#e8f0fe;color:#1a56db}
+.pill.gray{background:#f1f2f4;color:#5f6672}
+.loc{font-size:15px;font-weight:700;margin:2px 0 3px}
+.addr{font-size:12.5px;color:#5f6672;margin-bottom:10px}
+.sec{font-size:12px;color:#8a909c;font-weight:600;margin:12px 0 6px;padding-top:10px;border-top:1px dashed #eceef1}
+.it{background:#fafbfc;border-radius:9px;padding:10px 11px;margin-bottom:7px}
+.it .n{font-weight:700;font-size:13.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.it .d{font-size:12px;color:#5f6672;margin-top:3px}
+.kv{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0}
+.kv span:first-child{color:#6b7280} .kv span:last-child{font-weight:600}
+.money{display:flex;justify-content:space-between;align-items:baseline;background:#f6f9ff;border-radius:9px;padding:11px 12px;margin-top:8px}
+.qrs{width:52px;height:52px;border-radius:7px;flex:none;cursor:pointer;display:block}
+.qrlink{display:block;margin-top:10px;padding:13px 11px;font-size:13px;color:#0a9d5c;font-weight:600;background:#f2f8f4;border-radius:9px;text-decoration:none}
+.qrov{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(8,12,18,.88);z-index:99;display:none;align-items:center;justify-content:center;flex-direction:column}
+.qrov.on{display:flex}
+.qrov img{width:min(72vw,300px);height:auto;border-radius:10px;background:#fff;padding:10px;box-sizing:border-box}
+.qrov p{color:#e6e8ec;font-size:13.5px;margin-top:14px;line-height:1.7;text-align:center;padding:0 20px}
+.money em{font-style:normal;font-size:12px;color:#4b5563}
+.money b{font-size:19px;color:#1f6feb;font-weight:700}
+.line{font-size:12.5px;padding:7px 0;border-bottom:1px dashed #eceef1;display:flex;justify-content:space-between;gap:10px}
+.line:last-child{border-bottom:0}
+.line .l{flex:1;min-width:0}
+.line .l b{font-weight:600;display:block;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.line .l i{font-style:normal;color:#8a909c;font-size:11.5px}
+.line .r{font-weight:700;color:#1a1d23;white-space:nowrap}
+.empty{text-align:center;color:#8a909c;padding:48px 16px;font-size:13px}
+.contact{display:flex;gap:8px;margin-top:10px}
+.contact a{flex:1;text-align:center;text-decoration:none;padding:9px 0;border-radius:9px;font-size:13px;font-weight:600;background:#f1f5ff;color:#1f6feb}
+.ft{text-align:center;color:#9aa0ac;font-size:11px;padding:8px 16px 0}
+/* ---- 日期筛选 ---- */
+.filter{background:#fff;border-radius:12px;padding:12px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.filter .ftitle{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;font-weight:700;color:#374151;margin-bottom:10px}
+.filter .ftitle em{font-style:normal;font-weight:600;color:#8a909c;font-size:11.5px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;margin-bottom:10px;-webkit-overflow-scrolling:touch}
+.chips::-webkit-scrollbar{display:none}
+.chips button{flex:0 0 auto;border:1px solid #dcdfe4;background:#fff;color:#4b5563;padding:6px 12px;border-radius:16px;font-size:12px;font-weight:600;white-space:nowrap}
+.chips button.on{background:#eef4ff;border-color:#1f6feb;color:#1f6feb}
+.dfield{display:flex;align-items:center;gap:8px}
+.dfield input[type=date]{flex:1;min-width:0;border:1px solid #dcdfe4;border-radius:9px;padding:9px 10px;font-size:13px;color:#1a1d23;background:#fff;-webkit-appearance:none;appearance:none;font-family:inherit}
+.dfield .tilde{color:#9aa0ac;font-size:13px;flex:0 0 auto}
+.dfield .clr{flex:0 0 auto;border:0;background:#f1f2f4;color:#5f6672;border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600}
+.dhint{margin-top:9px;font-size:12px;color:#6b7280;line-height:1.6}
+.dhint b{color:#1f6feb}
+.rst{margin-top:10px;padding-top:10px;border-top:1px dashed #eceef1;display:flex;justify-content:space-between;font-size:12.5px}
+.rst span{color:#6b7280} .rst b{color:#1a1d23}
+@media (prefers-color-scheme:dark){
+ body{background:#111418;color:#e6e8ec}
+ .stats{background:#262b33} .stats div{background:#1a1e24}
+ .card{background:#1a1e24;box-shadow:none} .it{background:#21262e}
+ .addr,.kv span:first-child,.it .d{color:#9aa2ae}
+ .money{background:#1c2530} .line{border-color:#2a3038} .qrlink{background:#1b2a22;color:#3ecf8e}
+ .tabs button{background:#1a1e24;border-color:#2a3038;color:#b6bdc9}
+ .ft{color:#6b7280}
+ .filter{background:#1a1e24;box-shadow:none}
+ .filter .ftitle{color:#c9d0da}
+ .chips button{background:#21262e;border-color:#2a3038;color:#b6bdc9}
+ .chips button.on{background:#1c2f4d;border-color:#3b8bff;color:#8fb8ff}
+ .dfield input[type=date]{background:#21262e;border-color:#2a3038;color:#e6e8ec;color-scheme:dark}
+ .dfield .clr{background:#2a3038;color:#b6bdc9}
+ .rst{border-color:#2a3038} .rst b{color:#e6e8ec}
+ .fwd{background:#1c2f4d;color:#8fb8ff} .arr button{background:#21262e;border-color:#2a3038;color:#b6bdc9} .arr .arr-btn{background:#1c2f4d;border-color:#3b8bff;color:#8fb8ff} .arr-badge{background:#1b2a22;color:#3ecf8e} .arr input[type=date]{background:#21262e;border-color:#2a3038;color:#e6e8ec;color-scheme:dark} .thb{background:#21262e}
+
+}
+
+/* ---- 报修图片/视频 ---- */
+.thumbs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+.thb{position:relative;border:0;padding:0;background:#f1f2f4;border-radius:8px;overflow:hidden;aspect-ratio:1;cursor:pointer;font:inherit}
+.thb img{width:100%;height:100%;object-fit:cover;display:block}
+.thb.vid span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;background:rgba(0,0,0,.35)}
+.thb i{position:absolute;left:4px;right:4px;bottom:3px;font-style:normal;font-size:9px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.mvov img,.mvov video{max-width:min(92vw,560px);max-height:70vh;border-radius:10px;display:block}
+.mvov img{background:#fff}
+.mvov video{background:#000}
+.mvov p{color:#e6e8ec;font-size:13px;margin-top:12px;line-height:1.7;text-align:center;padding:0 20px}
+.ov-x{position:absolute;top:14px;right:14px;width:36px;height:36px;border-radius:50%;border:0;background:rgba(255,255,255,.18);color:#fff;font-size:17px;cursor:pointer}
+/* ---- 每单操作行：转发 + 已安排 ---- */
+.ops{display:flex;gap:8px;align-items:flex-start;margin-top:12px;flex-wrap:wrap}
+.fwd{display:inline-block;padding:9px 14px;border-radius:9px;background:#f1f5ff;color:#1f6feb;font-size:13px;font-weight:600;text-decoration:none;cursor:pointer}
+.arr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;flex:1;min-width:180px}
+.arr-badge{background:#e6f7ef;color:#0a7d4b;font-weight:700;padding:6px 10px;border-radius:9px}
+.arr button{border:1px solid #dcdfe4;background:#fff;color:#374151;padding:8px 12px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer}
+.arr .arr-btn{background:#eef4ff;border-color:#1f6feb;color:#1f6feb}
+.arr .arr-form{display:flex;gap:6px;align-items:center}
+.arr input[type=date]{border:1px solid #dcdfe4;border-radius:9px;padding:7px 9px;font-size:12.5px;color:#1a1d23;-webkit-appearance:none;appearance:none;font-family:inherit}
+.overdue{display:none}
+/* ---- 提示条 ---- */
+.toast{position:fixed;left:50%;bottom:12%;transform:translateX(-50%) translateY(20px);background:rgba(20,26,34,.92);color:#fff;font-size:13px;padding:10px 16px;border-radius:20px;opacity:0;pointer-events:none;transition:.25s;z-index:120;max-width:80vw;text-align:center}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>"""
+
+OPS = """<div class="ops">
+  <a class="fwd" data-href="o-{no}.html">转发给师傅</a>
+  <div class="arr" data-no="{no}">
+    <span class="arr-badge" style="display:none">已安排 · <b class="arr-date"></b></span>
+    <button type="button" class="arr-btn">已安排师傅</button>
+    <button type="button" class="arr-undo" style="display:none">撤销安排</button>
+    <span class="arr-form" style="display:none"><input type="date" class="arr-when" aria-label="预计上门日期"><button type="button" class="arr-save">保存</button><button type="button" class="arr-cancel">取消</button></span>
+  </div>
+</div>"""
+OVERLAYS = """<div id="qrOv" class="qrov"><button type="button" class="ov-x">✕</button><img id="qrOvImg" alt="填报二维码"/><p>维修完成后扫码填报维修服务单<br/>长按可识别二维码，或保存图片</p></div>
+<div id="mvOv" class="qrov mvov"><button type="button" class="ov-x">✕</button><div id="mvBox"></div></div>
+<div id="toast" class="toast"></div>
+<iframe id="mksIf" title="marks" style="position:absolute;width:0;height:0;border:0" src="https://jkwx-repair-portal.app.workbuddy.host/bridge.html?sharecode=NUM5RPANLE"></iframe>
+<script>
+(function(){
+  var BD='https://jkwx-repair-portal.app.workbuddy.host';
+  var QROV=document.getElementById('qrOv'),QRIMG=document.getElementById('qrOvImg');
+  var MVOV=document.getElementById('mvOv'),MVBOX=document.getElementById('mvBox');
+  var TOAST=document.getElementById('toast'),IFR=document.getElementById('mksIf');
+  var cards=[].slice.call(document.querySelectorAll('.card'));
+  var MARKS={},REQ=0,PEND={},bridgeUp=false,tries=0;
+  function pad(n){return n<10?'0'+n:''+n}
+  function fmt(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
+  function today(){var d=new Date();d.setHours(0,0,0,0);return d}
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  var toastT=null;
+  function toast(s){TOAST.textContent=s;TOAST.classList.add('on');clearTimeout(toastT);toastT=setTimeout(function(){TOAST.classList.remove('on')},2600)}
+  function copyText(s){
+    function legacy(){var ta=document.createElement('textarea');ta.value=s;ta.style.cssText='position:fixed;left:-999px;top:0';document.body.appendChild(ta);ta.select();var ok=false;try{ok=document.execCommand('copy')}catch(e){}document.body.removeChild(ta);return ok}
+    if(navigator.clipboard&&navigator.clipboard.writeText){try{return navigator.clipboard.writeText(s).then(function(){return true},function(){return legacy()})}catch(e){}}
+    return Promise.resolve(legacy());
+  }
+  // ---- 报修图片/视频放大查看 ----
+  function openMedia(th){
+    var src=th.getAttribute('data-src'),name=th.getAttribute('data-name')||'',vid=th.getAttribute('data-video')==='1';
+    if(vid){MVBOX.innerHTML='<video src="'+esc(src)+'" controls playsinline webkit-playsinline preload="metadata"></video><p>'+(name?esc(name)+'<br/>':'')+'点右上角 ⋯ 菜单可保存视频</p>'}
+    else{MVBOX.innerHTML='<img src="'+esc(src)+'" alt="报修图片"/><p>'+(name?esc(name)+'<br/>':'')+'长按图片可识别或保存</p>'}
+    MVOV.classList.add('on');
+  }
+  document.addEventListener('click',function(e){
+    var t=e.target;
+    var q=t.closest?t.closest('.qrs'):null;
+    if(q){QRIMG.src=q.getAttribute('src');QROV.classList.add('on');return}
+    var th=t.closest?t.closest('.thb'):null;
+    if(th){openMedia(th);return}
+    if(t.closest&&t.closest('.ov-x')){QROV.classList.remove('on');MVOV.classList.remove('on');return}
+    if(t===QROV)QROV.classList.remove('on');
+    if(t===MVOV||(t.closest&&t.closest('#mvOv p')))MVOV.classList.remove('on');
+  },true);
+  // ---- 已安排标记（经 bridge iframe 写云数据库，所有打开本页的人可见） ----
+  window.addEventListener('message',function(ev){
+    if(ev.origin!==BD)return;
+    var d=ev.data||{};
+    if(d.type==='bridge-ready'){bridgeUp=true;loadMarks()}
+    else if(PEND[d.req]&&(d.type==='marks-data'||d.type==='marks-set-done')){var f=PEND[d.req];delete PEND[d.req];f(d)}
+  });
+  function bridgeCall(msg){return new Promise(function(res){
+    if(!IFR.contentWindow)return res(null);
+    var req=++REQ;msg.req=req;PEND[req]=res;
+    try{IFR.contentWindow.postMessage(msg,'*')}catch(e){return res(null)}
+    setTimeout(function(){if(PEND[req]){delete PEND[req];res(null)}},10000);
+  })}
+  function loadMarks(){bridgeCall({type:'marks-get'}).then(function(r){
+    if(!r){tries++;if(tries<4)setTimeout(loadMarks,3500);return}
+    if(r.error)return;
+    MARKS={};(r.data||[]).forEach(function(m){MARKS[m.order_no]=m});
+    renderMarks();overdueCheck();
+  })}
+  function renderMarks(){
+    cards.forEach(function(c){
+      var no=c.getAttribute('data-no');if(!no)return;
+      var box=c.querySelector('.arr');if(!box)return;
+      var m=MARKS[no],on=!!(m&&m.arranged);
+      box.querySelector('.arr-badge').style.display=on?'':'none';
+      if(on)box.querySelector('.arr-date').textContent=(m.visit_date||'已定');
+      box.querySelector('.arr-btn').style.display=on?'none':'';
+      box.querySelector('.arr-undo').style.display=on?'':'none';
+      box.querySelector('.arr-form').style.display='none';
+    });
+  }
+  function setStatus(no,arranged,date,box){
+    var btns=[].slice.call(box.querySelectorAll('button'));btns.forEach(function(b){b.disabled=true});
+    bridgeCall({type:'marks-set',order_no:no,arranged:arranged,visit_date:date}).then(function(r){
+      btns.forEach(function(b){b.disabled=false});
+      if(!r){toast('标记服务未就绪，请稍后再试');return}
+      if(r.error){toast('保存失败：'+r.error);return}
+      MARKS[no]={order_no:no,arranged:arranged,visit_date:date||null};
+      renderMarks();overdueCheck();
+      toast(arranged?'已标记：已安排师傅':'已撤销标记');
+    });
+  }
+  document.addEventListener('click',function(e){
+    var box=e.target.closest?e.target.closest('.arr'):null;if(!box)return;
+    var no=box.getAttribute('data-no'),f=box.querySelector('.arr-form'),inp=box.querySelector('.arr-when');
+    if(e.target.classList.contains('arr-btn')){
+      f.style.display='';
+      if(!inp.value){var d=today();d.setDate(d.getDate()+1);inp.value=fmt(d)}
+    }else if(e.target.classList.contains('arr-cancel')){f.style.display='none'}
+    else if(e.target.classList.contains('arr-save')){
+      var v=inp.value;if(!v){toast('请选择预计上门日期');return}
+      setStatus(no,true,v,box);
+    }else if(e.target.classList.contains('arr-undo')){setStatus(no,false,'',box)}
+  });
+  // ---- 超时：待维修且未安排，超派单时间 5 天 ----
+  function overdueCheck(){
+    var lim=today();lim.setDate(lim.getDate()-5);
+    cards.forEach(function(c){
+      var no=c.getAttribute('data-no'),s=c.getAttribute('data-s'),day=c.getAttribute('data-d')||'';
+      var m=MARKS[no];
+      var bad=s==='pending'&&!(m&&m.arranged)&&day&&new Date(day+'T00:00:00')<lim;
+      var b=c.querySelector('.overdue');
+      if(b)b.style.display=bad?'':'none';
+    });
+  }
+  // ---- 转发：复制本单独立页链接 ----
+  document.addEventListener('click',function(e){
+    var f=e.target.closest?e.target.closest('.fwd'):null;if(!f)return;
+    var href=f.getAttribute('data-href');
+    var url=location.origin+location.pathname.replace(/[^\\/]*$/,'')+href;
+    copyText(url).then(function(ok){toast(ok?'链接已复制，去微信粘贴发给师傅':'复制失败，请长按页面地址手动复制')});
+  });
+  overdueCheck();
+})();
+</script>
+"""
+ORDER_PAGE = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f8">
+<meta name="rev" content="{rev}">
+<title>{no} · 维修单详情</title>
+{css}
+</head>
+<body>
+<div class="hd">
+  <div class="sub">维修申报 · 单据详情（转发页）</div>
+  <h1 style="font-size:17px;word-break:break-all">{no}</h1>
+  <div class="meta"><span>{unit}</span><span>派单 {dispatchDate}</span><span>金额 {amount}</span></div>
+</div>
+<div class="wrap">
+  <div class="card {status}" data-no="{no}" data-s="{status}" data-d="{dateKey}">
+    <div class="row">
+      <div class="no">{no}</div>
+      <div style="display:flex;align-items:center;gap:8px;flex:none">{qrsmall}
+      <span class="pill red overdue">⚠ 超时</span>
+      <div class="pill {status}">{statusText}</div></div>
+    </div>
+    <div class="loc">{loc}</div>
+    <div class="addr">{address}</div>
+    <div class="kv"><span>申请人 / 电话</span><span>{applicant} {phone}</span></div>
+    <div class="kv"><span>派单时间</span><span>{dispatchDate}</span></div>
+    {items}
+    {bills}
+    {media}
+    {ops}
+  </div>
+</div>
+<div class="ft">数据来自钉钉 AI 表格「维修申报」，如与现场不符请联系总部资产管理部</div>
+<script>
+(function(){{
+  // 转发页也自动探新：数据一变整页刷新，师傅看到的永远是最新内容
+  var MYREV=document.querySelector('meta[name=rev]').content||'';
+  if(typeof fetch!=='function')return;
+  function probe(){{
+    if(document.hidden)return;
+    fetch('data/rev.json?ts='+Date.now(),{{cache:'no-store'}})
+      .then(function(r){{return r.ok?r.json():null}})
+      .then(function(j){{if(j&&j.rev&&j.rev!==MYREV)location.reload()}})
+      .catch(function(){{}});
+  }}
+  document.addEventListener('visibilitychange',function(){{if(!document.hidden)probe()}});
+  setInterval(probe,45000);
+}})();
+</script>
+{overlays}
+</body>
+</html>"""
+
+# ---------------- 媒体（报修图片/视频） ----------------
+# repair-qr-dispatch 出单时把该单附件上传到仓库 media/<单号>/ 并维护
+# media/manifest.json。Actions 里检出仓库后按 cwd 读取；本机模式没有
+# 该文件 → 空表，页面自然不显示图片块。
+MEDIA: dict[str, list[dict]] = {}
+MEDIA_ROOT: Path | None = None
+
+
+def load_media_manifest() -> None:
+    global MEDIA_ROOT
+    if MEDIA:
+        return
+    for base in (Path.cwd(), ROOT):
+        p = base / "media" / "manifest.json"
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                MEDIA.update(data)
+                MEDIA_ROOT = base / "media"
+                return
+        except (OSError, ValueError):
+            continue
+
+
+def copy_media() -> None:
+    """把仓库里的 media/ 摊进 site/，随 artifact 一起发布。"""
+    if not MEDIA_ROOT or not MEDIA_ROOT.exists():
+        return
+    tgt = SITE / "media"
+    if tgt.exists():
+        shutil.rmtree(tgt)
+    shutil.copytree(MEDIA_ROOT, tgt)
+
+
+def media_section(order: dict) -> str:
+    ms = order.get("media") or []
+    no = (order.get("no") or "").strip()
+    if not ms or not no:
+        return ""
+    thumbs = []
+    for m in ms:
+        fname = str(m.get("file") or "")
+        if not fname:
+            continue
+        src = f"media/{urlquote(no, safe='')}/{urlquote(fname, safe='')}"
+        name = str(m.get("name") or fname)
+        nesc = html.escape(name, quote=True)
+        if m.get("video"):
+            thumbs.append(
+                f'<button type="button" class="thb vid" data-src="{src}" '
+                f'data-video="1" data-name="{nesc}"><span>▶</span>'
+                f'<i>{html.escape(name)}</i></button>')
+        else:
+            thumbs.append(
+                f'<button type="button" class="thb" data-src="{src}" '
+                f'data-name="{nesc}"><img src="{src}" loading="lazy" '
+                f'alt="报修图片"/></button>')
+    if not thumbs:
+        return ""
+    return (f'<div class="sec">报修图片/视频（{len(thumbs)}）点击查看大图</div>'
+            f'<div class="thumbs">{"".join(thumbs)}</div>')
+
+
 PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -450,91 +810,7 @@ PAGE = """<!DOCTYPE html>
 <meta name="theme-color" content="#f5f6f8">
 <meta name="rev" content="{rev}">
 <title>{unit} · 我的维修单</title>
-<style>
-*{{box-sizing:border-box;-webkit-tap-highlight-color:transparent}}
-html,body{{margin:0;padding:0}}
-body{{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;padding-bottom:32px}}
-.hd{{background:linear-gradient(135deg,#1f6feb,#3b8bff);color:#fff;padding:20px 18px 18px}}
-.hd .sub{{font-size:12px;opacity:.82;letter-spacing:.3px}}
-.hd h1{{margin:4px 0 0;font-size:22px;font-weight:700;letter-spacing:.5px}}
-.hd .meta{{margin-top:10px;font-size:11.5px;opacity:.78;display:flex;gap:12px;flex-wrap:wrap}}
-.stats{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#e6e8ec;margin:0 0 2px}}
-.stats div{{background:#fff;padding:12px 6px;text-align:center}}
-.stats b{{display:block;font-size:18px;font-weight:700;line-height:1.2}}
-.stats span{{font-size:11px;color:#6b7280}}
-.b-done b{{color:#0a9d5c}} .b-pend b{{color:#e08300}} .b-amt b{{color:#1f6feb;font-size:15px}}
-.wrap{{padding:12px}}
-.tabs{{display:flex;gap:8px;margin:0 0 12px}}
-.tabs button{{flex:1;border:1px solid #dcdfe4;background:#fff;color:#4b5563;padding:9px 0;border-radius:9px;font-size:13px;font-weight:600}}
-.tabs button.on{{background:#1f6feb;border-color:#1f6feb;color:#fff}}
-.card{{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}}
-.card.done{{border-left:3px solid #0a9d5c}} .card.pend{{border-left:3px solid #e08300}}
-.row{{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}}
-.no{{font-size:12px;color:#6b7280;font-family:ui-monospace,Menlo,monospace;word-break:break-all}}
-.pill{{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}}
-.pill.done{{background:#e6f7ef;color:#0a7d4b}} .pill.pend{{background:#fff5e5;color:#b46a00}}
-.pill.red{{background:#feecec;color:#c62828}} .pill.blue{{background:#e8f0fe;color:#1a56db}}
-.pill.gray{{background:#f1f2f4;color:#5f6672}}
-.loc{{font-size:15px;font-weight:700;margin:2px 0 3px}}
-.addr{{font-size:12.5px;color:#5f6672;margin-bottom:10px}}
-.sec{{font-size:12px;color:#8a909c;font-weight:600;margin:12px 0 6px;padding-top:10px;border-top:1px dashed #eceef1}}
-.it{{background:#fafbfc;border-radius:9px;padding:10px 11px;margin-bottom:7px}}
-.it .n{{font-weight:700;font-size:13.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}}
-.it .d{{font-size:12px;color:#5f6672;margin-top:3px}}
-.kv{{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0}}
-.kv span:first-child{{color:#6b7280}} .kv span:last-child{{font-weight:600}}
-.money{{display:flex;justify-content:space-between;align-items:baseline;background:#f6f9ff;border-radius:9px;padding:11px 12px;margin-top:8px}}
-.qrs{{width:52px;height:52px;border-radius:7px;flex:none;cursor:pointer;display:block}}
-.qrlink{{display:block;margin-top:10px;padding:13px 11px;font-size:13px;color:#0a9d5c;font-weight:600;background:#f2f8f4;border-radius:9px;text-decoration:none}}
-.qrov{{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(8,12,18,.88);z-index:99;display:none;align-items:center;justify-content:center;flex-direction:column}}
-.qrov.on{{display:flex}}
-.qrov img{{width:min(72vw,300px);height:auto;border-radius:10px;background:#fff;padding:10px;box-sizing:border-box}}
-.qrov p{{color:#e6e8ec;font-size:13.5px;margin-top:14px;line-height:1.7;text-align:center;padding:0 20px}}
-.money em{{font-style:normal;font-size:12px;color:#4b5563}}
-.money b{{font-size:19px;color:#1f6feb;font-weight:700}}
-.line{{font-size:12.5px;padding:7px 0;border-bottom:1px dashed #eceef1;display:flex;justify-content:space-between;gap:10px}}
-.line:last-child{{border-bottom:0}}
-.line .l{{flex:1;min-width:0}}
-.line .l b{{font-weight:600;display:block;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
-.line .l i{{font-style:normal;color:#8a909c;font-size:11.5px}}
-.line .r{{font-weight:700;color:#1a1d23;white-space:nowrap}}
-.empty{{text-align:center;color:#8a909c;padding:48px 16px;font-size:13px}}
-.contact{{display:flex;gap:8px;margin-top:10px}}
-.contact a{{flex:1;text-align:center;text-decoration:none;padding:9px 0;border-radius:9px;font-size:13px;font-weight:600;background:#f1f5ff;color:#1f6feb}}
-.ft{{text-align:center;color:#9aa0ac;font-size:11px;padding:8px 16px 0}}
-/* ---- 日期筛选 ---- */
-.filter{{background:#fff;border-radius:12px;padding:12px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}}
-.filter .ftitle{{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;font-weight:700;color:#374151;margin-bottom:10px}}
-.filter .ftitle em{{font-style:normal;font-weight:600;color:#8a909c;font-size:11.5px}}
-.chips{{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;margin-bottom:10px;-webkit-overflow-scrolling:touch}}
-.chips::-webkit-scrollbar{{display:none}}
-.chips button{{flex:0 0 auto;border:1px solid #dcdfe4;background:#fff;color:#4b5563;padding:6px 12px;border-radius:16px;font-size:12px;font-weight:600;white-space:nowrap}}
-.chips button.on{{background:#eef4ff;border-color:#1f6feb;color:#1f6feb}}
-.dfield{{display:flex;align-items:center;gap:8px}}
-.dfield input[type=date]{{flex:1;min-width:0;border:1px solid #dcdfe4;border-radius:9px;padding:9px 10px;font-size:13px;color:#1a1d23;background:#fff;-webkit-appearance:none;appearance:none;font-family:inherit}}
-.dfield .tilde{{color:#9aa0ac;font-size:13px;flex:0 0 auto}}
-.dfield .clr{{flex:0 0 auto;border:0;background:#f1f2f4;color:#5f6672;border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600}}
-.dhint{{margin-top:9px;font-size:12px;color:#6b7280;line-height:1.6}}
-.dhint b{{color:#1f6feb}}
-.rst{{margin-top:10px;padding-top:10px;border-top:1px dashed #eceef1;display:flex;justify-content:space-between;font-size:12.5px}}
-.rst span{{color:#6b7280}} .rst b{{color:#1a1d23}}
-@media (prefers-color-scheme:dark){{
- body{{background:#111418;color:#e6e8ec}}
- .stats{{background:#262b33}} .stats div{{background:#1a1e24}}
- .card{{background:#1a1e24;box-shadow:none}} .it{{background:#21262e}}
- .addr,.kv span:first-child,.it .d{{color:#9aa2ae}}
- .money{{background:#1c2530}} .line{{border-color:#2a3038}} .qrlink{{background:#1b2a22;color:#3ecf8e}}
- .tabs button{{background:#1a1e24;border-color:#2a3038;color:#b6bdc9}}
- .ft{{color:#6b7280}}
- .filter{{background:#1a1e24;box-shadow:none}}
- .filter .ftitle{{color:#c9d0da}}
- .chips button{{background:#21262e;border-color:#2a3038;color:#b6bdc9}}
- .chips button.on{{background:#1c2f4d;border-color:#3b8bff;color:#8fb8ff}}
- .dfield input[type=date]{{background:#21262e;border-color:#2a3038;color:#e6e8ec;color-scheme:dark}}
- .dfield .clr{{background:#2a3038;color:#b6bdc9}}
- .rst{{border-color:#2a3038}} .rst b{{color:#e6e8ec}}
-}}
-</style>
+{css}
 </head>
 <body>
 <div class="hd">
@@ -751,35 +1027,26 @@ body{{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyst
   }}catch(e){{}}
 }})();
 </script>
-<div id="qrOv" class="qrov"><img id="qrOvImg" alt="填报二维码"/><p>维修完成后扫码填报维修服务单<br/>长按可识别二维码，或保存图片</p></div>
-<script>
-  var QROV=document.getElementById('qrOv'),QRIMG=document.getElementById('qrOvImg');
-  document.addEventListener('click',function(e){{
-    var t=e.target;
-    // 点到右上角小码 → 放大；点到遮罩任意处 → 关闭
-    if(t&&t.classList&&t.classList.contains('qrs')){{
-      QRIMG.src=t.getAttribute('src');QROV.classList.add('on');return;
-    }}
-    if(QROV.classList.contains('on'))QROV.classList.remove('on');
-  }},true);
-</script>
+{overlays}
 </body>
 </html>"""
 
 
-CARD = """<div class="card {status}" data-s="{status}" data-d="{dateKey}" data-amt="{amtRaw}">
+CARD = """<div class="card {status}" data-no="{no}" data-s="{status}" data-d="{dateKey}" data-amt="{amtRaw}">
   <div class="row">
     <div class="no">{no}</div>
     <div style="display:flex;align-items:center;gap:8px;flex:none">{qrsmall}
+    <span class="pill red overdue">⚠ 超时</span>
     <div class="pill {status}">{statusText}</div></div>
   </div>
   <div class="loc">{loc}</div>
   <div class="addr">{address}</div>
   <div class="kv"><span>申请人 / 电话</span><span>{applicant} {phone}</span></div>
   <div class="kv"><span>派单时间</span><span>{dispatchDate}</span></div>
-  <div class="kv"><span>校区申报</span><span>{applyDate}</span></div>
   {items}
   {bills}
+  {media}
+  {ops}
 </div>"""
 
 
@@ -820,55 +1087,101 @@ def qr_block(order: dict) -> str:
             '维修完成后<b>点击此处</b>填报维修服务单</a>')
 
 
+def order_items_bills(o: dict) -> tuple[str, str]:
+    """渲染一单的维修项 + 维修清单（单位页卡片与转发页共用）。"""
+    items_html = []
+    for it in o["items"]:
+        label, cls = urgency_of(it["level"])
+        bits = []
+        if it["qty"]:
+            bits.append(f'数量 {it["qty"]}')
+        if it["loc"]:
+            bits.append(f'位置 {it["loc"]}')
+        if it["desc"]:
+            bits.append(it["desc"])
+        items_html.append(
+            f'<div class="it"><div class="n">{it["name"] or "未命名"}'
+            f'<span class="pill {cls}">{label}</span></div>'
+            f'<div class="d">{" · ".join(bits) or "—"}</div></div>')
+
+    bill_html = ""
+    if o["bills"]:
+        parts = []
+        for b in o["bills"]:
+            rows = "".join(
+                f'<div class="line"><div class="l"><b>{ln["cat"] or "维修项"}</b>'
+                f'<i>{"数量 " + (str(int(ln["qty"])) if ln["qty"] is not None else "—")}'
+                f' × 单价 {money(ln["price"])}'
+                f'{" · 人工费 " + money(ln["labor"]) if ln["labor"] else ""}'
+                f'{" · " + ln["desc"] if ln["desc"] else ""}</i></div>'
+                f'<div class="r">{money(ln["amount"])}</div></div>'
+                for ln in b["lines"]) or '<div class="line"><div class="l">未填明细</div></div>'
+            extra = []
+            if b["tax"]:
+                extra.append(f"税费 {money(b['tax'])}")
+            if b["remote"]:
+                extra.append(f"远程费 {money(b['remote'])}")
+            parts.append(
+                f'<div class="sec">维修清单 · 填报 {b["fillTime"] or "—"}'
+                f'{" · 完成 " + b["doneDate"] if b["doneDate"] else ""}'
+                f'{" · 校区已签字" if b["signed"] else ""}</div>{rows}'
+                f'<div class="money"><em>{" · ".join(extra) or "含税总额"}</em>'
+                f'<b>{money(b["total"])}</b></div>')
+        bill_html = "".join(parts)
+    else:
+        bill_html = ('<div class="sec">维修清单</div>'
+                     '<div class="it"><div class="d">该单尚未收到维修清单报单，'
+                     '请完成维修后扫码填报维修服务单</div></div>')
+    return "".join(items_html), bill_html
+
+
+def write_order_pages(ds: dict) -> set[str]:
+    """每张申请单 → site/o-<审批编号>.html（独立转发页）。
+
+    收件师傅拿到链接即可看全部内容、放大二维码、看报修图片、标记已安排。
+    审批编号是长数字不可枚举；同一编号派多家单位时显示第一家名。
+    """
+    seen: dict[str, tuple[str, dict]] = {}
+    for u in ds["units"]:
+        for o in u["orders"]:
+            no = (o.get("no") or "").strip()
+            if no and no not in seen:
+                seen[no] = (u["name"], o)
+    for no, (uname, o) in seen.items():
+        items_html, bill_html = order_items_bills(o)
+        st = o["status"]
+        html_txt = ORDER_PAGE.format(
+            rev=ds["rev"],
+            generated_at=ds["generated_at"],
+            css=CSS,
+            overlays=OVERLAYS,
+            unit=uname,
+            no=no,
+            status=st,
+            statusText="已维修" if st == "done" else "待维修",
+            loc=o["area"] or "—",
+            address=o["address"] or "—",
+            applicant=o["applicant"] or "—",
+            phone=o["phone"] or "",
+            dispatchDate=o["dispatchDate"] or "—",
+            amount=money(o["total"]),
+            dateKey=o["dispatchDate"] or "",
+            qrsmall=qr_block(o),
+            items=items_html,
+            bills=bill_html,
+            media=media_section(o),
+            ops=OPS.format(no=no),
+        )
+        atomic_write(SITE / f"o-{no}.html", html_txt)
+    return set(seen)
+
+
 def render_cards(unit: dict) -> str:
     if not unit["orders"]:
         return ""
     out = []
     for o in unit["orders"]:
-        items_html = []
-        for it in o["items"]:
-            label, cls = urgency_of(it["level"])
-            bits = []
-            if it["qty"]:
-                bits.append(f'数量 {it["qty"]}')
-            if it["loc"]:
-                bits.append(f'位置 {it["loc"]}')
-            if it["desc"]:
-                bits.append(it["desc"])
-            items_html.append(
-                f'<div class="it"><div class="n">{it["name"] or "未命名"}'
-                f'<span class="pill {cls}">{label}</span></div>'
-                f'<div class="d">{" · ".join(bits) or "—"}</div></div>')
-
-        bill_html = ""
-        if o["bills"]:
-            parts = []
-            for b in o["bills"]:
-                rows = "".join(
-                    f'<div class="line"><div class="l"><b>{ln["cat"] or "维修项"}</b>'
-                    f'<i>{"数量 " + (str(int(ln["qty"])) if ln["qty"] is not None else "—")}'
-                    f' × 单价 {money(ln["price"])}'
-                    f'{" · 人工费 " + money(ln["labor"]) if ln["labor"] else ""}'
-                    f'{" · " + ln["desc"] if ln["desc"] else ""}</i></div>'
-                    f'<div class="r">{money(ln["amount"])}</div></div>'
-                    for ln in b["lines"]) or '<div class="line"><div class="l">未填明细</div></div>'
-                extra = []
-                if b["tax"]:
-                    extra.append(f"税费 {money(b['tax'])}")
-                if b["remote"]:
-                    extra.append(f"远程费 {money(b['remote'])}")
-                parts.append(
-                    f'<div class="sec">维修清单 · 填报 {b["fillTime"] or "—"}'
-                    f'{" · 完成 " + b["doneDate"] if b["doneDate"] else ""}'
-                    f'{" · 校区已签字" if b["signed"] else ""}</div>{rows}'
-                    f'<div class="money"><em>{" · ".join(extra) or "含税总额"}</em>'
-                    f'<b>{money(b["total"])}</b></div>')
-            bill_html = "".join(parts)
-        else:
-            bill_html = ('<div class="sec">维修清单</div>'
-                         '<div class="it"><div class="d">该单尚未收到维修清单报单，'
-                         '请完成维修后扫码填报维修服务单</div></div>')
-
+        items_html, bill_html = order_items_bills(o)
         out.append(CARD.format(
             status=o["status"],
             statusText="已维修" if o["status"] == "done" else "待维修",
@@ -884,6 +1197,8 @@ def render_cards(unit: dict) -> str:
             items="".join(items_html),
             bills=bill_html,
             qrsmall=qr_block(o),
+            media=media_section(o),
+            ops=OPS.format(no=o["no"]) if o["no"] else "",
         ))
     return "".join(out)
 
@@ -915,6 +1230,8 @@ def write_pages(ds: dict) -> list[dict]:
         slug = f"u-{unit_token(u['name'])}"
         st = u["stats"]
         html = PAGE.format(
+            css=CSS,
+            overlays=OVERLAYS,
             unit=u["name"],
             rev=ds["rev"],
             generated_at=ds["generated_at"],
@@ -940,6 +1257,13 @@ def write_pages(ds: dict) -> list[dict]:
     stale = SITE / "data" / "units.json"
     if stale.exists():
         stale.unlink(missing_ok=True)
+    # 每单独立转发页 + 报修媒体随站发布
+    keep_o = {f"o-{no}.html" for no in write_order_pages(ds)}
+    copy_media()
+    for old in SITE.glob("o-*.html"):
+        if old.name not in keep_o:
+            old.unlink(missing_ok=True)
+            print(f"已清理失效单页 {old.name}", file=sys.stderr)
     return manifest
 
 
