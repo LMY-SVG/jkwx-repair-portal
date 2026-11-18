@@ -1253,6 +1253,16 @@ def write_pages(ds: dict) -> list[dict]:
     atomic_write(SITE / "data" / "rev.json",
                  json.dumps({"generated_at": ds["generated_at"], "rev": ds["rev"]},
                             ensure_ascii=False))
+    # 后台搜索索引（2026-11-18 应总部需求新增）：入口页 index.html 无令牌时
+    # 显示搜索框，按校区名关键字筛选全部单位并跳转对应单位页。
+    # ⚠ 这是公开文件：拿到入口地址的人可浏览全部单位页（用户已确认接受）。
+    atomic_write(SITE / "data" / "search.json",
+                 json.dumps({"generated_at": ds["generated_at"], "rev": ds["rev"],
+                             "units": [{"name": m["name"], "slug": m["slug"],
+                                        "total": m["stats"]["total"],
+                                        "pending": m["stats"]["pending"]}
+                                       for m in manifest]},
+                            ensure_ascii=False))
     # 兜底：清掉历史版本留在公开目录里的 units.json
     stale = SITE / "data" / "units.json"
     if stale.exists():
