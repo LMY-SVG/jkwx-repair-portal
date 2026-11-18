@@ -32,7 +32,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote as urlquote
 
-sys.path.insert(0, r"C:\Users\17514\.workbuddy\skills\repair-qr-dispatch\scripts")
+# 找 repair-qr-dispatch 的 _dws（换电脑/换用户名也要能跑，别写死用户目录）
+_HERE = Path(__file__).resolve().parent
+for _cand in (
+    _HERE.parent.parent / "repair-qr-dispatch" / "scripts",   # 技能目录同级
+    Path.home() / ".workbuddy" / "skills" / "repair-qr-dispatch" / "scripts",
+):
+    if (_cand / "_dws.py").exists():
+        sys.path.insert(0, str(_cand))
+        break
 try:
     from _dws import DwsError, run as dws_run  # noqa: E402
 except Exception:  # noqa: BLE001
