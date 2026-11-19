@@ -568,6 +568,14 @@ body{background:#f2f3f5;color:#1a1d23;font:14px/1.55 -apple-system,BlinkMacSyste
 .arr .arr-form{display:flex;gap:6px;align-items:center}
 .arr input[type=date]{border:1px solid #dcdfe4;border-radius:9px;padding:7px 9px;font-size:12.5px;color:#1a1d23;-webkit-appearance:none;appearance:none;font-family:inherit}
 .overdue{display:none}
+/* ---- 超期闪红：待维修 + 未标已安排 + 派单满 5 天（含第 5 天） ---- */
+@keyframes odflash{0%,100%{background:#fff}50%{background:#ffdcdc}}
+@keyframes odflashD{0%,100%{background:#1a1e24}50%{background:#4a1518}}
+.card.od{animation:odflash 1.15s ease-in-out infinite;border-left:3px solid #e5484d;
+box-shadow:0 0 0 1px rgba(229,72,77,.25)}
+@media (prefers-color-scheme:dark){.card.od{animation-name:odflashD}}
+@media (prefers-reduced-motion:reduce){.card.od{animation:none;background:#ffdcdc}}
+
 /* ---- 提示条 ---- */
 .toast{position:fixed;left:50%;bottom:12%;transform:translateX(-50%) translateY(20px);background:rgba(20,26,34,.92);color:#fff;font-size:13px;padding:10px 16px;border-radius:20px;opacity:0;pointer-events:none;transition:.25s;z-index:120;max-width:80vw;text-align:center}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -676,13 +684,14 @@ OVERLAYS = """<div id="qrOv" class="qrov"><button type="button" class="ov-x">✕
       setStatus(no,true,v,box);
     }else if(e.target.classList.contains('arr-undo')){setStatus(no,false,'',box)}
   });
-  // ---- 超时：待维修且未安排，超派单时间 5 天 ----
+  // ---- 超期：待维修且未安排，派单满 5 天（含第 5 天）→ 卡片底面持续闪红 ----
   function overdueCheck(){
     var lim=today();lim.setDate(lim.getDate()-5);
     cards.forEach(function(c){
       var no=c.getAttribute('data-no'),s=c.getAttribute('data-s'),day=c.getAttribute('data-d')||'';
       var m=MARKS[no];
-      var bad=s==='pending'&&!(m&&m.arranged)&&day&&new Date(day+'T00:00:00')<lim;
+      var bad=s!=='done'&&!(m&&m.arranged)&&day&&new Date(day+'T00:00:00')<=lim;
+      c.classList.toggle('od',!!bad);
       var b=c.querySelector('.overdue');
       if(b)b.style.display=bad?'':'none';
     });
