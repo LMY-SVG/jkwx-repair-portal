@@ -10,11 +10,14 @@ name: repair-sync
 # 仓库是公开的，Actions 日志任何人可见：
 #   只允许打印 rev / 单量 / 文件数，**绝不 echo 任何业务数据**。
 #
-# 2026-11-25 两次部署失败（"Found 0 artifact(s) / No artifacts named github-pages"）：
-#   upload-pages-artifact 成功但 deploy-pages 立刻查不到产物，属于产物索引延迟，
-#   且旧版「开头大批量删除 artifact」会加剧索引抖动。本版：
-#     1) 上传后轮询当前 run 的 artifact 直到可见，再部署；
-#     2) 清理旧产物挪到部署之后，且只删 6 小时前的，靠 retention-days 兜底。
+# 2026-11-25 部署连挂 4 次：github-script 能查到 artifact（同一个 run、
+# 未过期），0.4 秒后 deploy-pages 却报 "Found 0 artifact(s)"。属于 GitHub
+# artifact 索引的副本一致性延迟（一次查询命中新副本、下一次命中旧副本）。
+# 本版三道保险：
+#   1) 上传后连续 5 次都查到 artifact 才部署（约 15 秒，等副本同步）；
+#   2) deploy-pages 失败后间隔 25s / 40s 自动重试，最多 3 次；
+#   3) 清理旧产物挪到部署之后，删除动作不干扰本轮产物查询。
+# 另外 local_push.py 加了 30 分钟心跳重推，即使整轮全挂也能自愈。
 
 on:
   repository_dispatch:
@@ -37,7 +40,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: https://lmy-svg.github.io/jkwx-repair-portal/
     steps:
       - uses: actions/checkout@v4
 
@@ -77,27 +80,54 @@ jobs:
           path: _site
           retention-days: 1
 
-      # 关键：等 artifact 元数据可被 API 查到，再让 deploy-pages 去取。
-      # 否则 deploy-pages 会报 "Found 0 artifact(s)" 而整站停更。
+      # 关键：等 artifact 索引在多个副本间同步稳定，再让 deploy-pages 去取。
+      # 只查一次不够——曾出现 script 查到、0.4 秒后 deploy-pages 查不到。
       - if: steps.chk.outputs.go == 'yes'
         name: 等待产物索引就绪
         uses: actions/github-script@v7
         with:
           script: |
-            for (let i = 0; i < 12; i++) {
-              const { data } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner, repo: context.repo.repo,
-                run_id: context.runId, per_page: 100
-              });
-              const hit = (data.artifacts || []).find(
-                a => a.name === 'github-pages' && !a.expired);
-              if (hit) { core.info(`artifact ready id=${hit.id}`); break; }
-              core.info(`waiting artifact index ... ${i + 1}/12`);
-              await new Promise(r => setTimeout(r, 5000));
+            let ok = 0, lastId = 0;
+            for (let i = 0; i < 20; i++) {
+              try {
+                const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  run_id: context.runId, per_page: 100
+                });
+                const hit = (data.artifacts || []).find(
+                  a => a.name === 'github-pages' && !a.expired);
+                if (hit) { ok += 1; lastId = hit.id; } else { ok = 0; }
+                core.info(`artifact check ${i + 1}: stable=${ok}/5 id=${lastId}`);
+              } catch (e) {
+                ok = 0;
+                core.warning(`list artifacts: ${e.message}`);
+              }
+              if (ok >= 5) break;
+              await new Promise(r => setTimeout(r, 3000));
             }
+            core.info(ok >= 5 ? `artifact index stable, id=${lastId}`
+                              : 'artifact 索引未稳定，仍继续尝试部署');
 
       - if: steps.chk.outputs.go == 'yes'
-        id: deploy
+        id: deploy1
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - if: steps.chk.outputs.go == 'yes' && steps.deploy1.outcome == 'failure'
+        name: 部署重试前的等待
+        run: sleep 25
+
+      - if: steps.chk.outputs.go == 'yes' && steps.deploy1.outcome == 'failure'
+        id: deploy2
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - if: steps.chk.outputs.go == 'yes' && steps.deploy2.outcome == 'failure'
+        name: 部署二次重试前的等待
+        run: sleep 40
+
+      - if: steps.chk.outputs.go == 'yes' && steps.deploy2.outcome == 'failure'
+        id: deploy3
         uses: actions/deploy-pages@v4
 
       # 清理放最后：删除动作不会干扰本轮 deploy-pages 的产物查询。
