@@ -1,24 +1,20 @@
 name: repair-sync
 
-# 钉钉 AI 表格的自动化工作流（每 10 分钟）把 4 张表的数据推进来触发这里。
+# 钉钉 AI 表格数据由本机 local_push.py 通过 repository_dispatch 推进来。
 # 触发方式：POST /repos/LMY-SVG/jkwx-repair-portal/dispatches
 #          {"event_type":"dingtalk-sync","client_payload":{"data":"<base64(gzip(json))>"}}
 #
-# 2026-11-06 改：部署目标从 Netlify 换成 GitHub Pages（artifact 部署）。
-#   1. Netlify 免费额度按账号算，每 10 分钟部署整站一天 144 次，几天就爆，
-#      爆了报 `Account credit usage exceeded - new deploys are blocked`，
-#      本机和云端同时瘫，数据静止。
-#   2. 微信把 netlify.app 整域风控，扫码跳过去会被拦。
-#   Pages artifact 部署：公开仓库 Actions 免费不限次、部署产物不进仓库
-#   （所以单位页的令牌仍然不可枚举）、与二维码同域（微信不拦跨域导航）。
+# Pages artifact 部署：公开仓库 Actions 免费不限次、部署产物不进仓库
+# （所以单位页的令牌仍然不可枚举）、与二维码同域（微信不拦跨域导航）。
 #
 # 仓库是公开的，Actions 日志任何人可见：
 #   只允许打印 rev / 单量 / 文件数，**绝不 echo 任何业务数据**。
 #
-# 2026-11-25 加「清理旧产物」：Pages 每次构建上传 ~15MB artifact，
-#   累积到 281 个 / 7.2GB，超过免费额度 500MB 后新产物不可用，
-#   deploy-pages 报「No artifacts named github-pages」，站点停更。
-#   每轮只保留最近 3 个，其余删掉。
+# 2026-11-25 两次部署失败（"Found 0 artifact(s) / No artifacts named github-pages"）：
+#   upload-pages-artifact 成功但 deploy-pages 立刻查不到产物，属于产物索引延迟，
+#   且旧版「开头大批量删除 artifact」会加剧索引抖动。本版：
+#     1) 上传后轮询当前 run 的 artifact 直到可见，再部署；
+#     2) 清理旧产物挪到部署之后，且只删 6 小时前的，靠 retention-days 兜底。
 
 on:
   repository_dispatch:
@@ -45,31 +41,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 清理旧产物（防 500MB 配额打满）
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner, repo = context.repo.repo;
-            let all = [], page = 1;
-            while (page <= 10) {
-              const { data } = await github.rest.actions.listArtifactsForRepo({
-                owner, repo, per_page: 100, page
-              });
-              if (!data.artifacts.length) break;
-              all = all.concat(data.artifacts);
-              page += 1;
-            }
-            all.sort((a, b) => b.id - a.id);
-            const keep = new Set(all.slice(0, 3).map(a => a.id));
-            const targets = all.filter(a => !keep.has(a.id) && a.id !== context.runId);
-            core.info(`artifacts=${all.length} to_delete=${targets.length}`);
-            for (let i = 0; i < targets.length; i += 10) {
-              await Promise.all(targets.slice(i, i + 10).map(a =>
-                github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id })
-                  .catch(e => core.warning(`del ${a.id}: ${e.message}`))));
-            }
-            core.info('cleanup done');
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -84,11 +55,10 @@ jobs:
             echo "没有 payload（手动触发时正常）——跳过，不覆盖线上站点"
             exit 0
           fi
-          # 报修填报二维码内嵌到每单卡片（data URI）需要 qrcode+pillow
           python -m pip install --quiet qrcode pillow
           python cloud_sync.py
 
-      # 数据没变时 cloud_sync 不写 _site，这里就不部署（Pages 对发布频率有软限制）
+      # 数据没变时 cloud_sync 不写 _site，这里就不部署
       - name: 检查是否需要部署
         id: chk
         run: |
@@ -107,6 +77,54 @@ jobs:
           path: _site
           retention-days: 1
 
+      # 关键：等 artifact 元数据可被 API 查到，再让 deploy-pages 去取。
+      # 否则 deploy-pages 会报 "Found 0 artifact(s)" 而整站停更。
+      - if: steps.chk.outputs.go == 'yes'
+        name: 等待产物索引就绪
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (let i = 0; i < 12; i++) {
+              const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: context.runId, per_page: 100
+              });
+              const hit = (data.artifacts || []).find(
+                a => a.name === 'github-pages' && !a.expired);
+              if (hit) { core.info(`artifact ready id=${hit.id}`); break; }
+              core.info(`waiting artifact index ... ${i + 1}/12`);
+              await new Promise(r => setTimeout(r, 5000));
+            }
+
       - if: steps.chk.outputs.go == 'yes'
         id: deploy
         uses: actions/deploy-pages@v4
+
+      # 清理放最后：删除动作不会干扰本轮 deploy-pages 的产物查询。
+      - name: 清理旧产物（防 500MB 配额打满）
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner, repo = context.repo.repo;
+            let all = [], page = 1;
+            while (page <= 10) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner, repo, per_page: 100, page
+              });
+              if (!data.artifacts.length) break;
+              all = all.concat(data.artifacts);
+              page += 1;
+            }
+            all.sort((a, b) => b.id - a.id);
+            const keep = new Set(all.slice(0, 5).map(a => a.id));
+            const cutoff = Date.now() - 6 * 3600 * 1000;
+            const targets = all.filter(a => !keep.has(a.id) &&
+              new Date(a.created_at).getTime() < cutoff);
+            core.info(`artifacts=${all.length} to_delete=${targets.length}`);
+            for (let i = 0; i < targets.length; i += 10) {
+              await Promise.all(targets.slice(i, i + 10).map(a =>
+                github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id })
+                  .catch(e => core.warning(`del ${a.id}: ${e.message}`))));
+            }
+            core.info('cleanup done');
