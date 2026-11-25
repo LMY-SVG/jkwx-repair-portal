@@ -1,0 +1,48 @@
+name: prune-media
+
+# 定期清理仓库里的旧报修附件，防止仓库无限增长。
+#
+# 为什么需要：每单的报修图片/视频都提交进 media/，一单几百 KB 到几 MB，
+# 攒几个月就是上百 MB。钉钉 AI 表格和本机 D:\lmy\维修申报 都有备份，
+# 仓库里超过保留期的附件可以直接删（删掉的单在页面上不再显示图片）。
+#
+# 策略：每月 1 号跑一次，删掉「单号日期早于 60 天」的记录 → 实际保留约 2 个月。
+# 注意：Git 历史不会因此变小（文件还在历史里），这里只控制**当前快照**的增长。
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"        # 每月 1 日 03:00 UTC（北京时间 11:00）
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "保留天数（默认 60）"
+        required: false
+        default: "60"
+
+permissions:
+  contents: write              # 需要提交删除结果
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 清理旧附件
+        run: |
+          DAYS="${{ github.event.inputs.days }}"
+          if [ -z "$DAYS" ]; then DAYS=60; fi
+          python tools/prune_media.py --days "$DAYS"
+
+      - name: 提交
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A media signed_state.json
+          if git diff --cached --quiet; then
+            echo "没有需要清理的内容"
+            exit 0
+          fi
+          git commit -m "chore: 清理超过保留期的报修附件"
+          git push
