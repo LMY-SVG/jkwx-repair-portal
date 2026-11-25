@@ -14,6 +14,11 @@ name: repair-sync
 #
 # 仓库是公开的，Actions 日志任何人可见：
 #   只允许打印 rev / 单量 / 文件数，**绝不 echo 任何业务数据**。
+#
+# 2026-11-25 加「清理旧产物」：Pages 每次构建上传 ~15MB artifact，
+#   累积到 281 个 / 7.2GB，超过免费额度 500MB 后新产物不可用，
+#   deploy-pages 报「No artifacts named github-pages」，站点停更。
+#   每轮只保留最近 3 个，其余删掉。
 
 on:
   repository_dispatch:
@@ -24,6 +29,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write          # 删旧 artifact 需要
 
 concurrency:
   group: repair-sync
@@ -32,12 +38,37 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: 清理旧产物（防 500MB 配额打满）
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner, repo = context.repo.repo;
+            let all = [], page = 1;
+            while (page <= 10) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner, repo, per_page: 100, page
+              });
+              if (!data.artifacts.length) break;
+              all = all.concat(data.artifacts);
+              page += 1;
+            }
+            all.sort((a, b) => b.id - a.id);
+            const keep = new Set(all.slice(0, 3).map(a => a.id));
+            const targets = all.filter(a => !keep.has(a.id) && a.id !== context.runId);
+            core.info(`artifacts=${all.length} to_delete=${targets.length}`);
+            for (let i = 0; i < targets.length; i += 10) {
+              await Promise.all(targets.slice(i, i + 10).map(a =>
+                github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id })
+                  .catch(e => core.warning(`del ${a.id}: ${e.message}`))));
+            }
+            core.info('cleanup done');
 
       - uses: actions/setup-python@v5
         with:
@@ -74,6 +105,7 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+          retention-days: 1
 
       - if: steps.chk.outputs.go == 'yes'
         id: deploy
